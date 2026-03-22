@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql://traders_user:traders_pass@localhost:5432/traders_db",
+    "postgresql://neondb_owner:npg_CArg8f6RiuWH@ep-quiet-dust-a8yflq7j-pooler.eastus2.azure.neon.tech/neondb?sslmode=require&channel_binding=require",
 )
 
 
