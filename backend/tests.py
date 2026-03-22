@@ -5,17 +5,26 @@ Tests cover:
     - pivot point calculation (pivot.py)
     - demo transaction storage (transactions.py)
     - Flask API endpoints (app.py)
+
+PostgreSQL test isolation: each test class truncates the transactions table in
+setUp so that every test starts from a clean state. The test database is
+configured via the DATABASE_URL environment variable (defaults to the same
+value used in transactions.py).
 """
 
 import unittest
 import json
 import os
-import tempfile
 
-# Use a temporary DB so tests are isolated from production data
 import transactions as txn_module
 
-_original_db_path = txn_module.DB_PATH
+
+def _truncate_transactions() -> None:
+    """Remove all rows from the transactions table for test isolation."""
+    with txn_module._get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE transactions RESTART IDENTITY")
+        conn.commit()
 
 
 class TestPivotCalculation(unittest.TestCase):
@@ -60,20 +69,14 @@ class TestPivotCalculation(unittest.TestCase):
 class TestTransactions(unittest.TestCase):
 
     def setUp(self):
-        # Redirect DB to a temp file for test isolation
-        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        txn_module.DB_PATH = self._tmp.name
         txn_module.init_db()
-
-    def tearDown(self):
-        txn_module.DB_PATH = _original_db_path
-        os.unlink(self._tmp.name)
+        _truncate_transactions()
 
     def test_record_and_retrieve(self):
         txn = txn_module.record_transaction("AAPL", "BUY", 175.50, quantity=2)
         self.assertEqual(txn["ticker"], "AAPL")
         self.assertEqual(txn["action"], "BUY")
-        self.assertAlmostEqual(txn["price"], 175.50)
+        self.assertAlmostEqual(float(txn["price"]), 175.50)
         self.assertEqual(txn["quantity"], 2)
         self.assertIn("timestamp", txn)
 
@@ -100,18 +103,12 @@ class TestTransactions(unittest.TestCase):
 class TestFlaskAPI(unittest.TestCase):
 
     def setUp(self):
-        # Redirect DB to a temp file for test isolation
-        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        txn_module.DB_PATH = self._tmp.name
         txn_module.init_db()
+        _truncate_transactions()
 
         import app as flask_app
         flask_app.app.config["TESTING"] = True
         self.client = flask_app.app.test_client()
-
-    def tearDown(self):
-        txn_module.DB_PATH = _original_db_path
-        os.unlink(self._tmp.name)
 
     def test_transactions_empty(self):
         resp = self.client.get("/transactions")
@@ -151,3 +148,4 @@ class TestFlaskAPI(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

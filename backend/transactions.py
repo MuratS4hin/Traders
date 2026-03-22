@@ -1,45 +1,53 @@
 """
-Demo transaction logic with SQLite persistence.
+Demo transaction logic with PostgreSQL persistence.
+
+The database connection is configured via the DATABASE_URL environment variable:
+
+    DATABASE_URL=postgresql://user:password@host:5432/dbname
 
 Schema:
     transactions (
-        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        id        SERIAL  PRIMARY KEY,
         ticker    TEXT    NOT NULL,
         action    TEXT    NOT NULL,  -- BUY | SELL | HOLD
-        price     REAL    NOT NULL,
+        price     NUMERIC NOT NULL,
         quantity  INTEGER NOT NULL DEFAULT 1,
         timestamp TEXT    NOT NULL
     )
 """
 
-import sqlite3
 import os
+import psycopg2
+import psycopg2.extras
 from datetime import datetime, timezone
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "traders.db")
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://traders_user:traders_pass@localhost:5432/traders_db",
+)
 
 
-def _get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def _get_connection() -> psycopg2.extensions.connection:
+    """Return a new psycopg2 connection using DATABASE_URL."""
+    return psycopg2.connect(DATABASE_URL)
 
 
 def init_db() -> None:
     """Create the transactions table if it does not exist."""
     with _get_connection() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS transactions (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticker    TEXT    NOT NULL,
-                action    TEXT    NOT NULL,
-                price     REAL    NOT NULL,
-                quantity  INTEGER NOT NULL DEFAULT 1,
-                timestamp TEXT    NOT NULL
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS transactions (
+                    id        SERIAL  PRIMARY KEY,
+                    ticker    TEXT    NOT NULL,
+                    action    TEXT    NOT NULL,
+                    price     NUMERIC NOT NULL,
+                    quantity  INTEGER NOT NULL DEFAULT 1,
+                    timestamp TEXT    NOT NULL
+                )
+                """
             )
-            """
-        )
         conn.commit()
 
 
@@ -59,12 +67,17 @@ def record_transaction(ticker: str, action: str, price: float, quantity: int = 1
     timestamp = datetime.now(timezone.utc).isoformat()
 
     with _get_connection() as conn:
-        cursor = conn.execute(
-            "INSERT INTO transactions (ticker, action, price, quantity, timestamp) VALUES (?, ?, ?, ?, ?)",
-            (ticker, action, price, quantity, timestamp),
-        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO transactions (ticker, action, price, quantity, timestamp)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (ticker, action, price, quantity, timestamp),
+            )
+            row_id = cur.fetchone()[0]
         conn.commit()
-        row_id = cursor.lastrowid
 
     return {
         "id": row_id,
@@ -79,17 +92,20 @@ def record_transaction(ticker: str, action: str, price: float, quantity: int = 1
 def get_all_transactions() -> list:
     """Return all transactions ordered by most recent first."""
     with _get_connection() as conn:
-        rows = conn.execute(
-            "SELECT * FROM transactions ORDER BY id DESC"
-        ).fetchall()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM transactions ORDER BY id DESC")
+            rows = cur.fetchall()
     return [dict(row) for row in rows]
 
 
 def get_transactions_by_ticker(ticker: str) -> list:
     """Return all transactions for a specific ticker ordered by most recent first."""
     with _get_connection() as conn:
-        rows = conn.execute(
-            "SELECT * FROM transactions WHERE ticker = ? ORDER BY id DESC",
-            (ticker,),
-        ).fetchall()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM transactions WHERE ticker = %s ORDER BY id DESC",
+                (ticker,),
+            )
+            rows = cur.fetchall()
     return [dict(row) for row in rows]
+
